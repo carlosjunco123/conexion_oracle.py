@@ -1,19 +1,16 @@
 import oracledb
+from datetime import datetime
 
-# =========================
-# CONFIGURAR THICK MODE
-# =========================
-instant_client_path = r"C:\Users\regio\Desktop\instantclient-basic-windows.x64-19.29.0.0.0dbru\instantclient_19_29"
+# =======================================
+#  ACTIVAR MODO THICK PARA ORACLE 11g
+# =======================================
+oracledb.init_oracle_client(
+    lib_dir=r"C:\Users\regio\Desktop\instantclient-basic-windows.x64-19.29.0.0.0dbru (1)\instantclient_19_29"
+)
 
-try:
-    oracledb.init_oracle_client(lib_dir=instant_client_path)
-    print("✅ Thick mode activado correctamente.")
-except Exception as e:
-    print("❌ Error activando Thick mode:", e)
-
-# =========================
-# FUNCIÓN PARA CONEXIÓN
-# =========================
+# =======================================
+#  CONEXIÓN A ORACLE
+# =======================================
 def conectar():
     try:
         conn = oracledb.connect(
@@ -27,168 +24,154 @@ def conectar():
         print("❌ Error al conectar:", e)
         return None
 
-# =========================
-# LIMPIAR REGISTROS DE PRUEBA
-# =========================
-def limpiar_usuarios():
+# =======================================
+#  GENERAR ID AUTOMÁTICO
+# =======================================
+def generar_id(tabla, id_col):
     conn = conectar()
-    if conn:
+    if not conn:
+        return None
+    try:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM usuarios WHERE id_usuario >= 3")
-        conn.commit()
+        cursor.execute(f"SELECT NVL(MAX({id_col}),0) FROM {tabla}")
+        max_id = cursor.fetchone()[0]
+        return max_id + 1
+    finally:
         cursor.close()
         conn.close()
 
-def limpiar_libros():
+# =======================================
+#  VERIFICAR EXISTENCIA
+# =======================================
+def existe_usuario(correo):
     conn = conectar()
-    if conn:
+    if not conn:
+        return False
+    try:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM libros WHERE id_libro >= 5")
-        conn.commit()
+        cursor.execute("SELECT COUNT(*) FROM usuarios WHERE correo = :correo", [correo])
+        return cursor.fetchone()[0] > 0
+    finally:
         cursor.close()
         conn.close()
 
-def limpiar_prestamos():
+def existe_libro(titulo):
     conn = conectar()
-    if conn:
+    if not conn:
+        return False
+    try:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM prestamos WHERE id_prestamo >= 4")
-        conn.commit()
+        cursor.execute("SELECT COUNT(*) FROM libros WHERE titulo = :titulo", [titulo])
+        return cursor.fetchone()[0] > 0
+    finally:
         cursor.close()
         conn.close()
 
-# =========================
-# FUNCIONES CRUD
-# =========================
-
-# --- USUARIOS ---
-def insertar_usuario(id_usuario, nombre, correo):
+# =======================================
+#  INSERTAR DATOS
+# =======================================
+def insertar_usuario(nombre, correo):
+    if existe_usuario(correo):
+        print(f"⚠️ Usuario con correo {correo} ya existe. Se omite inserción.")
+        return
+    idu = generar_id("usuarios", "id_usuario")
+    if not idu:
+        return
     conn = conectar()
     if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.callproc("sp_insertar_usuario", [idu, nombre, correo])
+            conn.commit()
+            print(f"👤 Usuario insertado: {nombre} (ID {idu})")
+        except oracledb.Error as e:
+            print("❌ Error al insertar usuario:", e)
+        finally:
+            cursor.close()
+            conn.close()
+
+def insertar_libro(titulo, anio, id_autor):
+    if existe_libro(titulo):
+        print(f"⚠️ Libro con título '{titulo}' ya existe. Se omite inserción.")
+        return
+    idl = generar_id("libros", "id_libro")
+    if not idl:
+        return
+    conn = conectar()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.callproc("sp_insertar_libro", [idl, titulo, anio, id_autor])
+            conn.commit()
+            print(f"📘 Libro insertado: {titulo} (ID {idl})")
+        except oracledb.Error as e:
+            print("❌ Error al insertar libro:", e)
+        finally:
+            cursor.close()
+            conn.close()
+
+def insertar_prestamo(id_usuario=None, id_libro=None, fecha_str="2025-11-26"):
+    # Si no se pasa usuario o libro, usar los últimos insertados
+    if not id_usuario:
+        id_usuario = generar_id("usuarios", "id_usuario") - 1
+    if not id_libro:
+        id_libro = generar_id("libros", "id_libro") - 1
+    idp = generar_id("prestamos", "id_prestamo")
+    if not idp:
+        return
+    try:
+        fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d")
+    except ValueError as ve:
+        print("❌ Formato de fecha incorrecto:", ve)
+        return
+    conn = conectar()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.callproc("sp_insertar_prestamo", [idp, id_usuario, id_libro, fecha_dt])
+            conn.commit()
+            print(f"📚 Préstamo insertado (ID {idp})")
+        except oracledb.Error as e:
+            print("❌ Error al insertar préstamo:", e)
+        finally:
+            cursor.close()
+            conn.close()
+
+# =======================================
+#  MOSTRAR VISTAS
+# =======================================
+def mostrar_vista(vista_nombre):
+    conn = conectar()
+    if not conn:
+        return
+    try:
         cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO usuarios (id_usuario, nombre, correo) VALUES (:1, :2, :3)",
-            (id_usuario, nombre, correo)
-        )
-        conn.commit()
-        print(f"Usuario '{nombre}' insertado")
+        cursor.execute(f"SELECT * FROM {vista_nombre}")
+        filas = cursor.fetchall()
+        if not filas:
+            print(f"⚠️ La vista {vista_nombre} no tiene registros.")
+            return
+        print(f"\n📄 VISTA: {vista_nombre}\n")
+        for fila in filas:
+            print(fila)
+    except oracledb.Error as e:
+        print(f"❌ Error al mostrar vista {vista_nombre}: {e}")
+    finally:
         cursor.close()
         conn.close()
 
-def mostrar_usuarios():
-    conn = conectar()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM usuarios ORDER BY id_usuario")
-        rows = cursor.fetchall()
-        for row in rows:
-            print(f"ID: {row[0]} | Nombre: {row[1]} | Correo: {row[2]}")
-        cursor.close()
-        conn.close()
-
-def actualizar_correo(id_usuario, nuevo_correo):
-    conn = conectar()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE usuarios SET correo = :1 WHERE id_usuario = :2",
-            (nuevo_correo, id_usuario)
-        )
-        conn.commit()
-        print(f"Correo del usuario {id_usuario} actualizado")
-        cursor.close()
-        conn.close()
-
-def eliminar_usuario(id_usuario):
-    conn = conectar()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM usuarios WHERE id_usuario = :1", (id_usuario,))
-        conn.commit()
-        print(f"Usuario {id_usuario} eliminado")
-        cursor.close()
-        conn.close()
-
-# --- LIBROS ---
-def insertar_libro(id_libro, titulo, id_autor, anio):
-    conn = conectar()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO libros (id_libro, titulo, id_autor, anio_publicacion) VALUES (:1, :2, :3, :4)",
-            (id_libro, titulo, id_autor, anio)
-        )
-        conn.commit()
-        print(f"Libro '{titulo}' insertado")
-        cursor.close()
-        conn.close()
-
-def mostrar_libros():
-    conn = conectar()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id_libro, titulo, id_autor, anio_publicacion FROM libros ORDER BY id_libro")
-        rows = cursor.fetchall()
-        for row in rows:
-            print(f"ID: {row[0]} | Titulo: {row[1]} | Autor ID: {row[2]} | Año: {row[3]}")
-        cursor.close()
-        conn.close()
-
-# --- PRÉSTAMOS ---
-def insertar_prestamo(id_prestamo, id_usuario, id_libro, fecha_prestamo, fecha_devolucion):
-    conn = conectar()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO prestamos (id_prestamo, id_usuario, id_libro, fecha_prestamo, fecha_devolucion) "
-            "VALUES (:1, :2, :3, TO_DATE(:4,'YYYY-MM-DD'), TO_DATE(:5,'YYYY-MM-DD'))",
-            (id_prestamo, id_usuario, id_libro, fecha_prestamo, fecha_devolucion)
-        )
-        conn.commit()
-        print(f"Préstamo de Usuario {id_usuario} Libro {id_libro} insertado")
-        cursor.close()
-        conn.close()
-
-def mostrar_prestamos():
-    conn = conectar()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT p.id_prestamo, u.nombre, l.titulo, p.fecha_prestamo, p.fecha_devolucion
-            FROM prestamos p
-            JOIN usuarios u ON p.id_usuario = u.id_usuario
-            JOIN libros l ON p.id_libro = l.id_libro
-            ORDER BY p.id_prestamo
-        """)
-        rows = cursor.fetchall()
-        for row in rows:
-            print(f"ID: {row[0]} | Usuario: {row[1]} | Libro: {row[2]} | Desde: {row[3]} | Hasta: {row[4]}")
-        cursor.close()
-        conn.close()
-
-# =========================
-# BLOQUE DE PRUEBA
-# =========================
+# =======================================
+#  PRUEBA AUTOMÁTICA
+# =======================================
 if __name__ == "__main__":
-    # Limpiar registros de prueba
-    limpiar_prestamos()
-    limpiar_usuarios()
-    limpiar_libros()
 
-    # Usuarios
-    insertar_usuario(3, "Ana Torres", "ana@email.com")
-    mostrar_usuarios()
-    actualizar_correo(3, "ana.nuevo@email.com")
-    mostrar_usuarios()
-    eliminar_usuario(3)
-    mostrar_usuarios()
+    print("\n===== INSERTANDO DATOS =====")
+    insertar_usuario("Carlos", "carlos@gmail.com")
+    insertar_libro("Libro Python", 2025, 1)
+    insertar_prestamo()  # Usará automáticamente el último usuario y libro
 
-    # Libros
-    insertar_libro(5, "Libro de Prueba", 1, 2025)
-    mostrar_libros()
+    print("\n===== MOSTRANDO VISTAS =====")
+    mostrar_vista("vw_libros_detalle")
+    mostrar_vista("vw_prestamos_detalle")
 
-    # Préstamos
-    insertar_prestamo(4, 1, 5, "2025-11-14", "2025-11-21")
-    mostrar_prestamos()
-
-    input("\nPresiona ENTER para salir...")
+    print("\n===== FIN DE PRUEBA =====")
